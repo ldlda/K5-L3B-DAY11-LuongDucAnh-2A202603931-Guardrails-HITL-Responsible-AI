@@ -24,10 +24,20 @@ class AuditLogPlugin:
         self.name = "audit_log"
         self.logs: list[dict] = []
         self._open: dict[str, float] = {}
+        self._inputs: dict[str, dict] = {}
 
     def record_input(self, *, user_id: str, text: str, request_id: str | None = None):
-        """TODO: store input + start timestamp keyed by request_id/user_id."""
-        raise NotImplementedError("Implement AuditLogPlugin.record_input")
+        """Store input and start time for a later output record."""
+        key = request_id or user_id
+        now = datetime.now(timezone.utc)
+        self._open[key] = now.timestamp()
+        self._inputs[key] = {
+            "request_id": request_id,
+            "user_id": user_id,
+            "input": text,
+            "started_at": now.isoformat(),
+        }
+        return key
 
     def record_output(
         self,
@@ -38,15 +48,28 @@ class AuditLogPlugin:
         layer: str | None = None,
         request_id: str | None = None,
     ):
-        """TODO: store output, layer decision, latency; append to self.logs."""
-        raise NotImplementedError("Implement AuditLogPlugin.record_output")
+        """Store output, decision, and elapsed time for review."""
+        key = request_id or user_id
+        started = self._open.pop(key, None)
+        record = self._inputs.pop(key, {})
+        record.update({
+            "request_id": request_id,
+            "user_id": user_id,
+            "output": text,
+            "blocked": bool(blocked),
+            "layer": layer,
+            "latency_ms": round(max(0.0, datetime.now(timezone.utc).timestamp() - started) * 1000, 3) if started is not None else None,
+            "completed_at": utc_now_iso(),
+        })
+        self.logs.append(record)
+        return record
 
     def export_json(self, filepath: str | None = None):
         """Write logs to disk (JSON array) under repo-root ``outputs/`` by default."""
-        # TODO: path = filepath or default_audit_log_path()
-        #       ensure parent dirs exist, dump self.logs with indent=2
-        _ = filepath or default_audit_log_path()
-        raise NotImplementedError("Implement AuditLogPlugin.export_json")
+        path = Path(filepath or default_audit_log_path())
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(self.logs, indent=2, ensure_ascii=False), encoding="utf-8")
+        return str(path)
 
 
 def utc_now_iso() -> str:

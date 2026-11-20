@@ -100,12 +100,24 @@ except FileNotFoundError:
 # ---------------------------------------------------------------------------
 
 def get_blue_provider() -> str:
+    base_url = os.environ.get("BLUE_BASE_URL", "").strip().lower()
+    if "api.cloudflare.com" in base_url:
+        return "cloudflare-workers-ai"
     return BLUE_PROVIDER
 
 
 def get_blue_model() -> str:
-    # Hard-locked; env cannot override for the graded Blue Team path.
-    return BLUE_MODEL
+    # Defaults to the assignment's locked model; optional override supports
+    # experimentation with an OpenAI-compatible provider.
+    return os.environ.get("BLUE_MODEL", "").strip() or BLUE_MODEL
+
+
+def get_blue_api_key() -> str:
+    """Keep custom-provider credentials separate from the OpenRouter token."""
+    explicit = os.environ.get("BLUE_API_KEY", "").strip()
+    if explicit or os.environ.get("BLUE_BASE_URL", "").strip():
+        return explicit
+    return get_openrouter_api_key()
 
 
 def get_openrouter_api_key() -> str:
@@ -113,13 +125,20 @@ def get_openrouter_api_key() -> str:
 
 
 def blue_client_kwargs() -> dict:
-    """OpenAI SDK kwargs pointing at OpenRouter (Blue Team only)."""
+    """OpenAI SDK kwargs for the default OpenRouter or an optional Blue endpoint."""
+    try:
+        timeout = float(os.environ.get("BLUE_TIMEOUT_SECONDS", "30"))
+    except ValueError:
+        timeout = 30.0
     return {
-        "api_key": get_openrouter_api_key() or None,
+        "api_key": get_blue_api_key() or None,
         "base_url": (
-            os.environ.get("OPENROUTER_BASE_URL", OPENROUTER_BASE_URL).strip()
+            os.environ.get("BLUE_BASE_URL", "").strip()
+            or os.environ.get("OPENROUTER_BASE_URL", OPENROUTER_BASE_URL).strip()
             or OPENROUTER_BASE_URL
         ),
+        "timeout": timeout,
+        "max_retries": 0,
     }
 
 
@@ -234,34 +253,37 @@ def is_harder_model() -> bool:
     return any(x in m for x in ("gpt-5.6", "pro", "gemini-3.8", "gemini-3.7"))
 
 
-def setup_api_key():
-    """Ensure keys for Blue (OpenRouter) + Red / Red Advance (OpenAI or Gemini)."""
-    if not get_openrouter_api_key():
-        os.environ["OPENROUTER_API_KEY"] = input(
-            "Enter OpenRouter API Key (Blue): "
+def setup_api_key(*, require_blue: bool = True, require_red: bool = True):
+    """Prompt only for credentials used by the selected checkpoint(s)."""
+    if require_blue and not get_blue_api_key():
+        key_env = "BLUE_API_KEY" if os.environ.get("BLUE_BASE_URL") else "OPENROUTER_API_KEY"
+        os.environ[key_env] = input(
+            "Enter Blue provider API key: "
         ).strip()
-    print(f"Blue  — {blue_provider_label()}  [LOCKED]")
+    if require_blue:
+        print(f"Blue  — {blue_provider_label()}  [LOCKED]")
 
     red = get_red_provider()
     model = get_red_model()
-    if red == PROVIDER_GEMINI:
+    if require_red and red == PROVIDER_GEMINI:
         if not os.environ.get("GOOGLE_API_KEY", "").strip():
             os.environ["GOOGLE_API_KEY"] = input("Enter Google API Key (Red): ").strip()
         os.environ["GOOGLE_GENAI_USE_VERTEXAI"] = "0"
         print(f"Red / Red Advance  — gemini:{model}")
-    else:
+    elif require_red:
         if not get_openai_api_key():
             os.environ["OPENAI_API_KEY"] = input("Enter OpenAI API Key (Red): ").strip()
         print(f"Red / Red Advance  — openai:{model}")
 
-    print(
-        "Bonus: chọn một — Red tối đa +5 (B1) hoặc Red Advance tối đa +10 (B2)."
-    )
-    if is_harder_model():
+    if require_red:
         print(
-            f"Model khó ({model}) — tuỳ chọn; không đổi tên agent. "
-            f"(Gợi ý: {HARD_OPENAI_MODEL} / {HARD_GEMINI_MODEL})"
+            "Bonus: chọn một — Red tối đa +5 (B1) hoặc Red Advance tối đa +10 (B2)."
         )
+        if is_harder_model():
+            print(
+                f"Model khó ({model}) — tuỳ chọn; không đổi tên agent. "
+                f"(Gợi ý: {HARD_OPENAI_MODEL} / {HARD_GEMINI_MODEL})"
+            )
 
 
 ALLOWED_TOPICS = [

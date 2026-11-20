@@ -13,6 +13,7 @@ from google.adk import runners
 from google.adk.plugins import base_plugin
 
 from core.utils import chat_with_agent
+from core.config import DEMO_SECRETS
 
 
 # ============================================================
@@ -37,23 +38,31 @@ def content_filter(response: str) -> dict:
         dict with 'safe', 'issues', and 'redacted' keys
     """
     issues = []
-    redacted = response
+    redacted = response or ""
 
     # PII patterns to check
-    PII_PATTERNS = {
-        # TODO: Add regex patterns for:
-        # - VN phone number: r"0\d{9,10}"
-        # - Email: r"[\w.-]+@[\w.-]+\.[a-zA-Z]{2,}"
-        # - National ID (CMND/CCCD): r"\b\d{9}\b|\b\d{12}\b"
-        # - API key pattern: r"sk-[a-zA-Z0-9-]+"
-        # - Password pattern: r"password\s*[:=]\s*\S+"
+    pii_patterns = {
+        "Vietnamese phone number": r"(?<!\d)(?:\+?84|0)(?:[ .-]?\d){9,10}(?!\d)",
+        "email address": r"\b[\w.+-]+@[\w.-]+\.[A-Za-z]{2,}\b",
+        "national ID": r"(?<!\d)(?:\d{9}|\d{12})(?!\d)",
+        "API key": r"\bsk-[A-Za-z0-9_-]{6,}\b",
+        "password": r"\b(?:admin\s+)?password(?:\s+is|\s*[:=]|\s+)\s*\S+|\bmật\s*khẩu(?:\s+là|\s*[:=]|\s+)\s*\S+",
+        "database host": r"\bdb\.vinbank\.internal(?::\d+)?\b",
     }
 
-    for name, pattern in PII_PATTERNS.items():
-        matches = re.findall(pattern, response, re.IGNORECASE)
+    for name, pattern in pii_patterns.items():
+        matches = re.findall(pattern, redacted, re.IGNORECASE)
         if matches:
             issues.append(f"{name}: {len(matches)} found")
             redacted = re.sub(pattern, "[REDACTED]", redacted, flags=re.IGNORECASE)
+
+    # Also redact every configured lab secret, including values that do not
+    # match a generic credential format (for example the demo admin password).
+    for secret in sorted((str(s) for s in DEMO_SECRETS if s), key=len, reverse=True):
+        count = len(re.findall(re.escape(secret), redacted, flags=re.IGNORECASE))
+        if count:
+            issues.append(f"protected secret: {count} found")
+            redacted = re.sub(re.escape(secret), "[REDACTED]", redacted, flags=re.IGNORECASE)
 
     return {
         "safe": len(issues) == 0,
@@ -172,16 +181,22 @@ class OutputGuardrailPlugin(base_plugin.BasePlugin):
         if not response_text:
             return llm_response
 
-        # TODO: Implement logic:
-        # 1. Call content_filter(response_text)
-        #    - If issues found: replace llm_response.content with redacted version
-        #    - Increment self.redacted_count
-        # 2. If use_llm_judge: call llm_safety_check(response_text)
-        #    - If unsafe: replace llm_response.content with a safe message
-        #    - Increment self.blocked_count
-        # 3. Return llm_response (possibly modified)
+        filtered = content_filter(response_text)
+        if filtered["issues"]:
+            llm_response.content = types.Content(
+                role="model", parts=[types.Part.from_text(text=filtered["redacted"])],
+            )
+            self.redacted_count += 1
 
-        return llm_response  # TODO: modify if needed
+        if self.use_llm_judge:
+            verdict = await llm_safety_check(response_text)
+            if not verdict["safe"]:
+                llm_response.content = types.Content(
+                    role="model",
+                    parts=[types.Part.from_text(text="I can’t provide that response because it did not pass the safety check.")],
+                )
+                self.blocked_count += 1
+        return llm_response
 
 
 # ============================================================
