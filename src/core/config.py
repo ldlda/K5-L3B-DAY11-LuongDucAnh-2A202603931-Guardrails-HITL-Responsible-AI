@@ -18,6 +18,7 @@ Hai tầng model (không trộn):
 from __future__ import annotations
 
 import os
+import subprocess
 from pathlib import Path
 
 _ROOT = Path(__file__).resolve().parents[2]
@@ -266,10 +267,34 @@ def setup_api_key(*, require_blue: bool = True, require_red: bool = True):
     red = get_red_provider()
     model = get_red_model()
     if require_red and red == PROVIDER_GEMINI:
-        if not os.environ.get("GOOGLE_API_KEY", "").strip():
-            os.environ["GOOGLE_API_KEY"] = input("Enter Google API Key (Red): ").strip()
-        os.environ["GOOGLE_GENAI_USE_VERTEXAI"] = "0"
-        print(f"Red / Red Advance  — gemini:{model}")
+        use_vertex = os.environ.get("GOOGLE_GENAI_USE_VERTEXAI", "0").strip().lower() in {
+            "1", "true", "yes", "on",
+        }
+        if use_vertex:
+            if not os.environ.get("GOOGLE_CLOUD_PROJECT", "").strip():
+                try:
+                    project = subprocess.check_output(
+                        ["gcloud", "config", "get-value", "project"],
+                        stderr=subprocess.DEVNULL,
+                        text=True,
+                        timeout=5,
+                    ).strip()
+                except (FileNotFoundError, subprocess.SubprocessError):
+                    project = ""
+                if project and project != "(unset)":
+                    os.environ["GOOGLE_CLOUD_PROJECT"] = project
+            if not os.environ.get("GOOGLE_CLOUD_PROJECT", "").strip():
+                raise RuntimeError(
+                    "Vertex AI mode needs GOOGLE_CLOUD_PROJECT or an active gcloud project."
+                )
+            os.environ.setdefault("GOOGLE_CLOUD_LOCATION", "global")
+            os.environ["NEMOGUARDRAILS_LLM_FRAMEWORK"] = "langchain"
+            print(f"Red / Red Advance  — Vertex AI:{model} (ADC; no API key)")
+        else:
+            if not os.environ.get("GOOGLE_API_KEY", "").strip():
+                os.environ["GOOGLE_API_KEY"] = input("Enter Google API Key (Red): ").strip()
+            os.environ["GOOGLE_GENAI_USE_VERTEXAI"] = "0"
+            print(f"Red / Red Advance  — gemini:{model}")
     elif require_red:
         if not get_openai_api_key():
             os.environ["OPENAI_API_KEY"] = input("Enter OpenAI API Key (Red): ").strip()

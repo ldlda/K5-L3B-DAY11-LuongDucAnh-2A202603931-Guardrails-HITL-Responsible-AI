@@ -288,6 +288,13 @@ def build_rails_config(
         )
     except Exception as exc:
         if "environment variable" in str(exc):
+            if os.environ.get("GOOGLE_GENAI_USE_VERTEXAI", "0").strip().lower() in {
+                "1", "true", "yes", "on",
+            }:
+                raise RuntimeError(
+                    "NeMo Vertex self-check needs langchain-google-vertexai and an active "
+                    "Google Cloud ADC project. Install requirements and check gcloud auth."
+                ) from exc
             raise RuntimeError(
                 "NeMo Guardrails của Red Advance cần API key Red trong môi trường "
                 "(OPENAI_API_KEY hoặc GOOGLE_API_KEY). Kiểm tra file .env."
@@ -328,7 +335,27 @@ class NemoRailsGuard:
         from nemoguardrails import LLMRails
 
         if config is None:
-            config = build_rails_config(include_model=llm is None)
+            use_vertex = os.environ.get("GOOGLE_GENAI_USE_VERTEXAI", "0").strip().lower() in {
+                "1", "true", "yes", "on",
+            }
+            if llm is None and get_red_provider() == PROVIDER_GEMINI and use_vertex:
+                # NeMo 0.24's LangChain provider registry currently resolves
+                # `vertexai` to the deprecated VertexAI completion class. Use
+                # ChatVertexAI directly via LLMRails' supported llm= hook.
+                from langchain_google_vertexai import ChatVertexAI
+
+                project = os.environ.get("GOOGLE_CLOUD_PROJECT", "").strip()
+                location = os.environ.get("GOOGLE_CLOUD_LOCATION", "global").strip()
+                llm = ChatVertexAI(
+                    model=get_red_model(),
+                    project=project,
+                    location=location,
+                    temperature=0,
+                    max_output_tokens=256,
+                )
+                config = build_rails_config(include_model=False)
+            else:
+                config = build_rails_config(include_model=llm is None)
         self.version = getattr(nemoguardrails, "__version__", "?")
         self.rails = LLMRails(config, llm=llm, verbose=verbose)
         for name, fn in CUSTOM_ACTIONS.items():

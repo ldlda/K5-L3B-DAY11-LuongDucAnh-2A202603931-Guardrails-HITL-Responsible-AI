@@ -5,3 +5,6 @@ python-dotenv>=1.0.0
 pytest>=8.0.0
 jsonschema>=4.0.0
 nemoguardrails>=0.24.1,<0.25  # bắt buộc cho Red Advance (NeMo Guardrails)
+langchain-google-vertexai>=2.0.0  # NeMo self-check khi Red dùng Vertex AI / ADC
+langchain>=1.0.0  # framework adapter required by NeMo's Vertex AI engine
+langchain-community>=0.4.0  # NeMo LangChain provider registry dependency
